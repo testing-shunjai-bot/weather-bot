@@ -17,21 +17,71 @@ const SYSTEM = `你是Polymarket上海浦东机场最高气温市场交易助手
 回复只用纯文字和emoji，不用**##等markdown符号。`;
 
 // ── Daily probability report prompt ──────────────────────
-const DAILY_PROMPT = `搜索以下信息并给出今明两天上海浦东气温市场分析：
-1. 今天ZSPD实时天气（气温、云量）
-2. 今明两天上海最高气温预报
-3. Polymarket今明两天上海气温各档位定价
+const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+const DAY_NAMES = ["今天","明天","后天"];
 
-每天输出（纯文字无markdown）：
+// Generate Polymarket URL for any date offset from today
+function getPolymarketURL(offsetDays) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const slug = `highest-temperature-in-shanghai-on-${MONTHS[d.getMonth()]}-${d.getDate()}-${d.getFullYear()}`;
+  return { url: `https://polymarket.com/event/${slug}`, date: d };
+}
+
+function formatDate(d) {
+  return `${d.getMonth()+1}月${d.getDate()}日`;
+}
+
+function buildDailyPrompt(days) {
+  const sections = days.map(({ label, date, prices }) =>
+    `${label}（${formatDate(date)}）市场定价：\n${prices || "市场尚未开放"}`
+  ).join("\n\n");
+
+  return `以下是从Polymarket直接抓取的实时定价：
+
+${sections}
+
+请搜索上海浦东机场(ZSPD)未来3天天气预报，结合以上定价给出分析。
+
+每天输出（纯文字，无任何markdown符号）：
 📅 [日期]
 天气：[类型] 趋势：[升温↑/降温↓/持平→]
-预测：[X]°C → METAR [Y]°F → 结算[Z]°C
+预测最高温：约[X]°C
 
-[温度]°C 我方[X]% 市场[X]% 优势[+/-X%] [🟢买YES/🔴不操作]
-（仅列有定价档位）
+[温度]°C 我方[X]% 市场[X]% 优势[+/-X%] [🟢买YES / 🔴不操作]
+（只列>3%的档位）
 
-✅ 建议：[X°C] [YES/NO] 优势[+X%]
-⚠️ 风险：[一句话]`;
+✅ 建议：押[X°C] [YES/NO]，优势[+X%]
+⚠️ 风险：[一句话]
+━━━━━━━━━━━━━━━
+
+规则：优势>10%🟢强烈推荐，5-10%🟡可入场，<5%🔴不操作`;
+}
+
+// Scrape Polymarket prices from a URL
+async function scrapePolymarketPrices(url) {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const html = await res.text();
+    const lines = [];
+    // Extract temperature bucket prices from HTML
+    const regex = /(\d{1,2})°C[\s\S]{0,200}?(\d{1,3})%/g;
+    const seen = new Set();
+    let m;
+    while ((m = regex.exec(html)) !== null) {
+      const temp = m[1], pct = m[2];
+      const key = `${temp}-${pct}`;
+      if (!seen.has(key) && parseInt(pct) > 0) {
+        seen.add(key);
+        lines.push(`${temp}°C: ${pct}%`);
+      }
+      if (lines.length >= 8) break;
+    }
+    return lines.length > 0 ? lines.join("\n") : null;
+  } catch(e) {
+    return null;
+  }
+}
 
 // ── Ask Claude ────────────────────────────────────────────
 async function askClaude(messages) {
@@ -62,8 +112,17 @@ async function sendDailyReport(targetId) {
   const uids = targetId ? [targetId] : [...subscribers];
   if (uids.length === 0) return;
   try {
-    const reply = await askClaude([{ role: "user", content: DAILY_PROMPT }]);
-    const clean = reply.replace(/\*\*/g, "").replace(/#{1,3} /g, "").replace(/---/g, "━━━━━━━━━━━━━━━");
+    // Auto-fetch today, tomorrow, day after tomorrow
+    const dayOffsets = [0, 1, 2];
+    const fetched = await Promise.all(dayOffsets.map(async (offset) => {
+      const { url, date } = getPolymarketURL(offset);
+      const prices = await scrapePolymarketPrices(url);
+      return { label: DAY_NAMES[offset], date, prices };
+    }));
+
+    const prompt = buildDailyPrompt(fetched);
+    const reply = await askClaude([{ role: "user", content: prompt }]);
+    const clean = reply.replace(/\*\*/g, "").replace(/#{1,3} /g, "").replace(/---/g, "━━━━━━━━━━━━━");
     const msg = "🌤 每日概率报告（上午9点）\n\n" + clean + "\n\n⏰ 最佳入场窗口：现在–12:00";
     for (const uid of uids) {
       await bot.telegram.sendMessage(uid, msg);
