@@ -155,7 +155,7 @@ function scheduleDaily() {
 
 // ── Quick actions ─────────────────────────────────────────
 const QUICK = [
-  { label: "📊 今日+明日概率报告", msg: DAILY_PROMPT },
+  { label: "📊 今日+明日概率报告", msg: "__report__" },
   { label: "📅 今天怎么押？",      msg: "只分析今天的市场。搜索今天ZSPD实时天气和Polymarket今天的定价，给出今天各档位概率对比和最佳操作。" },
   { label: "📅 明天怎么押？",      msg: "只分析明天的市场。搜索明天上海天气预报和Polymarket明天的定价，给出明天各档位概率对比和最佳操作。" },
   { label: "⏰ 现在能入场？",      msg: "现在几点？结合当前时间和今天实时天气，告诉我现在适不适合入场，信号是否一致。" },
@@ -172,6 +172,7 @@ const keyboard = Markup.inlineKeyboard(
 // ── Handle any query ──────────────────────────────────────
 async function handleQuery(ctx, userMsg) {
   const uid = ctx.from.id;
+  if (userMsg === "__report__") { await sendDailyReport(uid); return; }
   if (userMsg === "__subscribe__") {
     subscribers.add(uid);
     await ctx.reply("✅ 已订阅！每天早上9点（上海时间）自动推送今日+明日概率报告。\n\n发送 /report 可立即获取今日报告。");
